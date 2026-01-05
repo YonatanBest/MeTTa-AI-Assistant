@@ -1,6 +1,6 @@
 import asyncio
 import argparse
-from loguru import logger
+from app.core.logging import logger
 from pymongo import AsyncMongoClient
 from app.core.utils.helpers import get_required_env
 from app.services.dependency_resolver import add_function_dependencies

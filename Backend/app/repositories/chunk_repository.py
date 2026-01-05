@@ -3,7 +3,7 @@ from pymongo.database import Database
 from typing import Optional, List
 import time
 from app.model.chunk import ChunkSchema, AnnotationStatus
-
+from app.core.utils.helpers import get_required_env
 STALE_PENDING_THRESHOLD = 60 * 60
 
 
@@ -13,7 +13,7 @@ class ChunkRepository:
     Uses 'chunkId' as the unique key and 'description' as the description field name in the DB.
     """
 
-    def __init__(self, db: Database, collection_name: str = "chunks"):
+    def __init__(self, db: Database, collection_name: str = f"{get_required_env("MONGO_COLLECTION")}"):
         self.collection = db.get_collection(collection_name)
 
     async def _ensure_indexes(self):

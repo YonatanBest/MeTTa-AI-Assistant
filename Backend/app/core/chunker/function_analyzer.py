@@ -3,9 +3,10 @@ Function analysis module for MeTTa code.
 Extracts function calls and definitions to support dependency tracking.
 """
 
-from typing import List, Set
+import re
+from typing import List, Set, Dict, Any
 from app.core.chunker import metta_ast_parser
-from loguru import logger
+from app.core.logging import logger
 
 # Built-in MeTTa functions and operations
 BUILTIN_FUNCTIONS = {
@@ -116,6 +117,43 @@ def _extract_function_name_from_rule(node: metta_ast_parser.SyntaxNode, code: st
                     return inner.parsed_text
     
     return ""
+
+
+def extract_imports(code: str) -> List[Dict[str, Any]]:
+    """
+    Extract all import! statements from MeTTa code.
+    
+    Args:
+        code: MeTTa source code as string
+        
+    Returns:
+        List of import scopes: [{"project": str, "section": str, "file": str}]
+    """
+    imports = []
+    import_pattern = re.compile(r'\(import!\s+&self\s+([^)\s]+)\)')
+    
+    matches = import_pattern.findall(code)
+    for match in matches:
+        parts = match.split(':')
+        
+        if len(parts) >= 1:
+            project = parts[0]
+            section = None
+            file_name = None
+            
+            if len(parts) == 2:
+                file_name = parts[1]
+            elif len(parts) >= 3:
+                section = parts[1]
+                file_name = parts[2]
+            
+            imports.append({
+                "project": project,
+                "section": section,
+                "file": file_name
+            })
+            
+    return imports
 
 
 def is_builtin_function(func_name: str) -> bool:

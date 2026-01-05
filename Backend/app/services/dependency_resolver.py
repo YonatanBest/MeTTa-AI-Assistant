@@ -1,8 +1,9 @@
 from typing import List, Dict, Optional
 from pymongo.database import Database
-from loguru import logger
-from app.core.chunker.function_analyzer import extract_function_calls, extract_function_definitions
+from app.core.logging import logger
+from app.core.chunker.function_analyzer import extract_function_calls, extract_function_definitions, extract_imports
 from app.db.db import get_chunks, update_chunk, _get_collection
+from app.core.utils.helpers import get_required_env
 
 
 async def add_function_dependencies(
@@ -41,7 +42,7 @@ async def add_function_dependencies(
             {"functions": []}
         ]
     
-    collection = _get_collection(mongo_db, "chunks")
+    collection = _get_collection(mongo_db, get_required_env("MONGO_COLLECTION"))
     
     total_chunks = await collection.count_documents(filter_query)
     logger.info(f"Found {total_chunks} chunks to process")
@@ -101,21 +102,13 @@ async def resolve_chunk_dependencies(
     mongo_db: Database
 ) -> List[str]:
     """
-    Resolve function dependencies for a single chunk.
-    
-    Args:
-        chunk: Chunk document from MongoDB
-        mongo_db: MongoDB database connection
-        
-    Returns:
-        List of chunkIds that this chunk depends on
+    Resolve function dependencies for a single chunk, including imported functions.
     """
+
     chunk_code = chunk.get("chunk", "")
     if not chunk_code:
         return []
-    
     function_calls = extract_function_calls(chunk_code)
-    
     if not function_calls:
         return []
     
@@ -124,6 +117,19 @@ async def resolve_chunk_dependencies(
     section = chunk.get("section", [])
     file = chunk.get("file", [])
     
+    # Get all imports from the same file to find external dependencies
+    all_imports = []
+    if file:
+        collection = _get_collection(mongo_db, get_required_env("MONGO_COLLECTION"))
+        file_chunks_cursor = collection.find({
+            "project": project,
+            "repo": repo,
+            "file": {"$in": file}
+        }, {"chunk": 1})
+        
+        async for fc in file_chunks_cursor:
+            all_imports.extend(extract_imports(fc.get("chunk", "")))
+
     dependency_ids = []
     
     for func_name in function_calls:
@@ -131,6 +137,18 @@ async def resolve_chunk_dependencies(
             func_name, project, repo, section, file, mongo_db
         )
         
+        if all_imports:
+            for imp in all_imports:
+                imp_chunks = await get_chunks_with_function_def(
+                    func_name, 
+                    imp.get("project"), 
+                    repo, 
+                    [imp.get("section")] if imp.get("section") else None,
+                    [imp.get("file")] if imp.get("file") else None,
+                    mongo_db
+                )
+                defining_chunks.extend(imp_chunks)
+
         for def_chunk in defining_chunks:
             def_chunk_id = def_chunk.get("chunkId")
             if def_chunk_id and def_chunk_id != chunk.get("chunkId"):
@@ -149,20 +167,9 @@ async def get_chunks_with_function_def(
     mongo_db: Database
 ) -> List[dict]:
     """
-    Find chunks that define a specific function within the same scope.
-    
-    Args:
-        function_name: Name of the function to find
-        project: Project name for scoping
-        repo: Repository URL for scoping
-        section: Section path for scoping
-        file: File name for scoping
-        mongo_db: MongoDB database connection
-        
-    Returns:
-        List of chunk documents that define the function
+    Find chunks that define a specific function within a given scope.
     """
-    collection = _get_collection(mongo_db, "chunks")
+    collection = _get_collection(mongo_db, get_required_env("MONGO_COLLECTION"))
     
     query = {
         "source": "code",
@@ -171,9 +178,16 @@ async def get_chunks_with_function_def(
     }
     
     if section:
-        query["section"] = section
+        query["section"] = {"$in": section} if isinstance(section, list) else section
+    
     if file:
-        query["file"] = file
+        # Support both exact match and .metta extension
+        file_targets = []
+        for f in (file if isinstance(file, list) else [file]):
+            file_targets.append(f)
+            if not f.endswith(".metta"):
+                file_targets.append(f + ".metta")
+        query["file"] = {"$in": file_targets}
     
     cursor = collection.find(query, {"_id": 0})
     chunks = [doc async for doc in cursor]
